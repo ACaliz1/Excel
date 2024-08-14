@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Excel</title>
+    <style>
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+        }
+
+        img {
+            max-width: 20px;
+            height: auto;
+        }
+
+        table {
+            border-collapse: collapse;
+        }
+
+        thead,
+        tr td:first-child {
+            background: #eee;
+        }
+
+        th,
+        td {
+            font-weight: bold;
+            font-size: 12px;
+            text-align: center;
+            border: 1px solid #ccc;
+            width: 64px;
+            height: 20px;
+            vertical-align: middle;
+            position: relative;
+        }
+
+        span,
+        input {
+            position: absolute;
+            inset: 0;
+            vertical-align: middle;
+            display: inline-flex;
+            justify-content: center;
+            align-content: center;
+        }
+
+        input {
+            border: 0;
+            opacity: 0;
+            pointer-events: none;
+            width: 100%;
+            border-radius: 2px;
+        }
+
+        input:focus {
+            outline: 2px solid #09f;
+            opacity: 1;
+        }
+
+        .selected {
+            background: rgb(174, 223, 255);
+        }
+    </style>
+    <script type="module">
+        const $ = el => document.querySelector(el);
+        const $$ = el => document.querySelectorAll(el);
+
+        const $table = $('table');
+        const $head = $('thead');
+        const $body = $('tbody');
+
+        const ROWS = 10;
+        const COLUMNS = 5;
+        const FIRST_CHAR_CODE = 65;
+
+        const range = length => Array.from({ length }, (_, i) => i);
+        const getColumn = i => String.fromCharCode(FIRST_CHAR_CODE + i);
+
+        let selectedColumn;
+
+        // Initialize STATE
+        let STATE = range(COLUMNS).map(() => range(ROWS).map(() => ({ computedValue: 0, value: '0' })));
+
+        function updateCell({ x, y, value }) {
+            const newState = structuredClone(STATE);
+            newState[x][y].value = value;
+            const constants = generateCellsConstants(newState);
+
+            const computedValue = computeValue(value, constants);
+            newState[x][y].computedValue = computedValue;
+
+            STATE = newState;
+
+            // Recalculate all cells to handle dependencies
+            computeAllCells(STATE, generateCellsConstants(STATE));
+            renderSpreadSheet();
+        }
+
+        function generateCellsConstants(cells) {
+            return cells.map((rows, x) => {
+                return rows.map((cell, y) => {
+                    const letter = getColumn(x);
+                    const cellId = `${letter}${y + 1}`;
+                    return `const ${cellId}=${cell.computedValue}`;
+                }).join('\n');
+            }).join('\n');
+        }
+
+        function computeValue(value, constants) {
+            if (value.startsWith('=')) {
+                const formula = value.substring(1);
+                let computedValue;
+                try {
+                    computedValue = eval(`(()=>{
+                    ${constants}
+                    return ${formula};
+                })()`);
+                } catch (e) {
+                    computedValue = `!ERROR: ${e.message}`;
+                }
+                return computedValue;
+            }
+            return parseFloat(value) || value; // Ensure that numerical values are parsed correctly
+        }
+
+        function computeAllCells(cells, constants) {
+            const updatedCells = new Set();
+            const cellsToUpdate = range(COLUMNS).flatMap(x => range(ROWS).map(y => `${getColumn(x)}${y + 1}`));
+
+            while (cellsToUpdate.length > 0) {
+                const cellId = cellsToUpdate.shift();
+                const [col, row] = [cellId.charCodeAt(0) - FIRST_CHAR_CODE, parseInt(cellId.substring(1)) - 1];
+
+                if (!updatedCells.has(cellId)) {
+                    const cell = cells[col][row];
+                    const computedValue = computeValue(cell.value, constants);
+                    cell.computedValue = computedValue;
+                    updatedCells.add(cellId);
+
+                    // Re-add dependencies
+                    cellsToUpdate.push(...findDependencies(cells, col, row));
+                }
+            }
+        }
+
+        function findDependencies(cells, x, y) {
+            const formula = cells[x][y].value;
+            const regex = /[A-Z]\d+/g;
+            const matches = formula.match(regex);
+            return matches ? matches : [];
+        }
+
+        const renderSpreadSheet = () => {
+            const headerHTML = `<tr>
+                <th></th>
+                ${range(COLUMNS).map(i => `<th>${getColumn(i)}</th>`).join('')}
+                </tr>`;
+
+            $head.innerHTML = headerHTML;
+
+            const bodyHTML = range(ROWS).map(row => {
+                return `<tr>
+                <td>${row + 1}</td>
+                ${range(COLUMNS).map(column => `
+                <td data-x="${column}" data-y="${row}">
+                    <span>${STATE[column][row].computedValue}</span>
+                    <input type="text" value="${STATE[column][row].value}" />
+                    </td>
+                    `).join('')}
+                </tr>`;
+            }).join('');
+
+            $body.innerHTML = bodyHTML;
+        }
+
+        $body.addEventListener('click', event => {
+            const td = event.target.closest('td');
+            if (!td) return;
+
+            const { x, y } = td.dataset;
+            const input = td.querySelector('input');
+
+            input.focus();
+
+            // Mover el cursor al final del texto
+            input.addEventListener('focus', () => {
+                const end = input.value.length;
+                input.setSelectionRange(end, end);
+            }, { once: true });
+
+            input.addEventListener('keydown', event => {
+                if (event.key === 'Enter') input.blur();
+            });
+
+            input.addEventListener('blur', () => {
+                if (input.value !== STATE[x][y].value) {
+                    updateCell({ x, y, value: input.value });
+                }
+            }, { once: true });
+
+            $$('.selected').forEach(el => el.classList.remove('selected'));
+        });
+
+        $head.addEventListener('click', event => {
+            const th = event.target.closest('th');
+            if (!th) return;
+
+            const x = [...th.parentNode.children].indexOf(th);
+            if (x <= 0) return;
+
+            selectedColumn = x - 1;
+
+            $$('.selected').forEach(el => el.classList.remove('selected'));
+            th.classList.add('selected');
+            $$(`tr td:nth-child(${x + 1})`).forEach(el => el.classList.add('selected'));
+        });
+
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Backspace' && selectedColumn !== null) {
+                range(ROWS).forEach(row => {
+                    updateCell({ x: selectedColumn, y: row, value: '' });
+                });
+                renderSpreadSheet();
+            }
+        });
+
+        document.addEventListener('copy', event => {
+            if (selectedColumn !== null) {
+                const columnValues = range(ROWS).map(row => STATE[selectedColumn][row].computedValue);
+                event.clipboardData.setData('text/plain', columnValues.join('\n'));
+                event.preventDefault();
+            }
+        });
+
+        renderSpreadSheet();
+    </script>
+</head>
+
+<body>
+    <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/7/73/Microsoft_Excel_2013-2019_logo.svg/1200px-Microsoft_Excel_2013-2019_logo.svg.png"
+        alt="Logo Excel">
+
+    <table>
+        <thead>
+        </thead>
+        <tbody>
+        </tbody>
+    </table>
+</body>
+
+</html>
